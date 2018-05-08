@@ -297,6 +297,7 @@ int main(int argc,char** argv){
         charge_vecteur(argv[2],&vec);
         nb_decoupe = mat.nb_lignes / nb_process;
         transfert_nb_decoupe(nb_decoupe,nb_process);
+        nb_decoupe += mat.nb_lignes % nb_process;
         sous_matrice = decoupe_matrice(&mat,nb_decoupe);
         transfert_taille_matrice_restante(mat.nb_lignes,suivant);
         transfert_matrice_restante(mat,suivant);
