@@ -6,6 +6,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <limits.h>
+#include <time.h>
 
 typedef struct Vecteur vecteur;
 
@@ -22,7 +23,7 @@ struct Matrice{
     int** lignes;
 };
 
-void affiche_vecteur(vecteur vec){
+void affiche_resultat_vecteur(vecteur vec){
     printf("(");
     for(int i =0;i<vec.taille-1;i++){
         printf("%d,",vec.contenu[i]);
@@ -30,7 +31,7 @@ void affiche_vecteur(vecteur vec){
     printf("%d)\n",vec.contenu[vec.taille-1]);
 }
 
-void affiche_matrice(matrice mat){
+void affiche_resultat_matrice(matrice mat){
     printf("(");
     for (int i =0;i<mat.nb_lignes;i++){
         printf("(");
@@ -151,15 +152,13 @@ void charge_vecteur(char* nom_fichier,vecteur* vec){
     fclose(fichier);
 }
 
-void transfert_nb_decoupe(int nb_decoupe, int nb_process){
-    for (int i =1;i<nb_process;i++){
-        MPI_Send(&nb_decoupe,1,MPI_INT,i,1,MPI_COMM_WORLD);
-    }
+void transfert_nb_decoupe(int nb_decoupe, int suivant){
+    MPI_Send(&nb_decoupe,1,MPI_INT,suivant,1,MPI_COMM_WORLD);
 }
 
-int recoie_nb_decoupe(){
+int recoie_nb_decoupe(int precedent){
     int message;
-    MPI_Recv(&message, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(&message, 1, MPI_INT, precedent, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     return message;
 }
 
@@ -209,7 +208,7 @@ vecteur recoie_resultat(int taille_resultat,int precedent){
 
 void reduit_matrice_lignes(matrice* mat,int nb_decoupe){
     mat->nb_lignes -= nb_decoupe;
-    for (int i = 0;i<nb_decoupe;i++){
+    for (int i = 0;i<mat->nb_lignes;i++){
         mat->lignes[i] = mat->lignes[i+nb_decoupe];
     }
 }
@@ -230,6 +229,7 @@ matrice decoupe_matrice(matrice* mat, int nb_decoupe){
 
 int calcul_vecteur_vecteur(int* tab, vecteur vec){
     int resultat = 0;
+    #pragma omp parallel for reduction(+:resultat)
     for (int i =0;i<vec.taille;i++){
         resultat += tab[i] * vec.contenu[i];
     }
@@ -237,37 +237,52 @@ int calcul_vecteur_vecteur(int* tab, vecteur vec){
 }
 
 void calcul_resultat(matrice mat,vecteur vec,vecteur* resultat){
-    int taille_precedente = resultat->taille;
-    if (resultat->taille == 0){
-        resultat->taille = mat.nb_lignes;
-        resultat->contenu = alloue_contenu_vecteur(resultat->taille);
-    }else{
-        resultat->taille += mat.nb_lignes;
-        resultat->contenu = realloc(resultat->contenu, resultat->taille*sizeof(int));
-        for (int i = taille_precedente;i<resultat->taille;i++){
-            resultat->contenu[i] = 0;
-        }
-    }
-    int j = 0;
-    for (int i =taille_precedente;i<taille_precedente+mat.nb_lignes;i++){
-        resultat->contenu[i] = calcul_vecteur_vecteur(mat.lignes[j++],vec);
+    resultat->taille = mat.nb_lignes;
+    resultat->contenu = alloue_contenu_vecteur(resultat->taille);
+    for (int i =0;i<resultat->taille;i++){
+        resultat->contenu[i] = calcul_vecteur_vecteur(mat.lignes[i],vec);
     }
 }
 
-void enregistre_resultat(vecteur resultat){
-    FILE* fichier = NULL;
-    fichier = fopen("resultat","w");
+void affiche_resultat(vecteur resultat){
     for (int i=0;i<resultat.taille;i++){
-        int nDigits = floor(log10(abs(resultat.contenu[i]))) + 1;
-        char* rajoute = (char*) malloc(sizeof(char)*nDigits);
-        sprintf(rajoute,"%d",resultat.contenu[i]);
-        fputs(rajoute,fichier);
-        fputs("\n",fichier);
+        printf("%d\n",resultat.contenu[i]);
     }
-    fclose(fichier);
 }
 
-int main(int argc,char** argv){
+void transfert_taille_vecteur(int taille, int suivant){
+    MPI_Send(&taille,1,MPI_INT,suivant,1,MPI_COMM_WORLD);
+}
+
+int recoie_taille_vecteur(int precedent){
+    int to_return;
+    MPI_Recv(&to_return,1,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    return to_return;
+}
+
+void transfert_vecteur(vecteur vec,int suivant){
+    int* contenu = vec.contenu;
+    MPI_Send(contenu,vec.taille,MPI_INT,suivant,1,MPI_COMM_WORLD);
+}
+
+void recoie_vecteur(vecteur* vec,int taille, int precedent){
+    int* vecteur_recu = alloue_contenu_vecteur(taille);
+    MPI_Recv(vecteur_recu,taille,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vec->taille = taille;
+    vec->contenu = vecteur_recu;
+}
+
+void fusionne_resultat(vecteur* resultat,vecteur* resultat_local){
+    int taille_precedente = resultat->taille;
+    resultat->taille += resultat_local->taille;
+    resultat->contenu = realloc(resultat->contenu, resultat->taille*sizeof(int));
+    int j = 0;
+    for (int i = taille_precedente;i<resultat->taille;i++){
+        resultat->contenu[i] = resultat_local->contenu[j++];
+    }
+}
+
+int main(int argc,char** argv){    
     int rang;
     int nb_process;
     char nom_processeur[MPI_MAX_PROCESSOR_NAME];
@@ -290,13 +305,19 @@ int main(int argc,char** argv){
     resultat.taille = 0;
     resultat.contenu = NULL;
 
+    vecteur resultat_local;
+    resultat_local.taille = 0;
+    resultat_local.contenu = NULL;
+
     int nb_decoupe;
 
     if(rang==0){
         charge_matrice(argv[1],&mat);
         charge_vecteur(argv[2],&vec);
+        transfert_taille_vecteur(vec.taille,suivant);
+        transfert_vecteur(vec,suivant);
         nb_decoupe = mat.nb_lignes / nb_process;
-        transfert_nb_decoupe(nb_decoupe,nb_process);
+        transfert_nb_decoupe(nb_decoupe,suivant);
         nb_decoupe += mat.nb_lignes % nb_process;
         sous_matrice = decoupe_matrice(&mat,nb_decoupe);
         transfert_taille_matrice_restante(mat.nb_lignes,suivant);
@@ -306,21 +327,25 @@ int main(int argc,char** argv){
 
         taille_resultat = vec.taille;
         resultat = recoie_resultat(taille_resultat,precedent);
-        enregistre_resultat(resultat);
+        affiche_resultat(resultat);
     }else{
-        charge_vecteur(argv[2],&vec);
-        nb_decoupe = recoie_nb_decoupe();
+        int taille_vecteur = recoie_taille_vecteur(precedent);
+        recoie_vecteur(&vec,taille_vecteur,precedent);
+        nb_decoupe = recoie_nb_decoupe(precedent);
         taille_matrice_restante = recoie_taille_matrice_restante(precedent);
         mat = recoie_matrice_restante(taille_matrice_restante,precedent,vec.taille);
         taille_resultat = nb_decoupe*rang;
-
         sous_matrice = decoupe_matrice(&mat,nb_decoupe);
-        resultat = recoie_resultat(taille_resultat,precedent);
-        calcul_resultat(sous_matrice,vec,&resultat);
         if (suivant != 0){
+            transfert_taille_vecteur(vec.taille,suivant);
+            transfert_vecteur(vec,suivant);
+            transfert_nb_decoupe(nb_decoupe,suivant);
             transfert_taille_matrice_restante(mat.nb_lignes,suivant);
             transfert_matrice_restante(mat,suivant);
         }
+        calcul_resultat(sous_matrice,vec,&resultat_local);
+        resultat = recoie_resultat(taille_resultat,precedent);
+        fusionne_resultat(&resultat,&resultat_local);
         transfert_resultat(resultat,suivant);
     }
     MPI_Finalize();
