@@ -156,7 +156,7 @@ void transfert_nb_decoupe(int nb_decoupe, int suivant){
     MPI_Send(&nb_decoupe,1,MPI_INT,suivant,1,MPI_COMM_WORLD);
 }
 
-int recoie_nb_decoupe(int precedent){
+int recoit_nb_decoupe(int precedent){
     int message;
     MPI_Recv(&message, 1, MPI_INT, precedent, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     return message;
@@ -166,7 +166,7 @@ void transfert_taille_matrice_restante(int taille, int suivant){
     MPI_Send(&taille,1,MPI_INT,suivant,1,MPI_COMM_WORLD);
 }
 
-int recoie_taille_matrice_restante(int precedent){
+int recoit_taille_matrice_restante(int precedent){
     int to_return;
     MPI_Recv(&to_return,1,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     return to_return;
@@ -179,17 +179,25 @@ void transfert_matrice_restante(matrice mat, int suivant){
     }
 }
 
-matrice recoie_matrice_restante(int taille, int precedent, int nb_colonnes){
+matrice recoit_morceau_matrice_processus(int precedent, int nb_colonnes,int nb_decoupe){
     matrice mat;
     mat.nb_colonnes = nb_colonnes;
-    mat.nb_lignes = taille;
+    mat.nb_lignes = nb_decoupe;
     mat.lignes = alloue_contenu_matrice(mat.nb_colonnes,mat.nb_lignes);
-    for (int i =0;i<mat.nb_lignes;i++){
+    for (int i =0;i<nb_decoupe;i++){
         int* reception = (int*) malloc(nb_colonnes*sizeof(int));
         MPI_Recv(reception,nb_colonnes,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         mat.lignes[i] = reception;
     }
     return mat;
+}
+
+void transfert_reste_matrice(int nb_decoupe,int taille_matrice_restante,int nb_colonnes,int precedent,int suivant){
+    for (int i =nb_decoupe;i<taille_matrice_restante;i++){
+        int* reception = (int*) malloc(nb_colonnes*sizeof(int));
+        MPI_Recv(reception,nb_colonnes,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Send(reception,nb_colonnes,MPI_INT,suivant,1,MPI_COMM_WORLD);
+    }
 }
 
 void transfert_resultat(vecteur resultat, int suivant){
@@ -254,7 +262,7 @@ void transfert_taille_vecteur(int taille, int suivant){
     MPI_Send(&taille,1,MPI_INT,suivant,1,MPI_COMM_WORLD);
 }
 
-int recoie_taille_vecteur(int precedent){
+int recoit_taille_vecteur(int precedent){
     int to_return;
     MPI_Recv(&to_return,1,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     return to_return;
@@ -265,7 +273,7 @@ void transfert_vecteur(vecteur vec,int suivant){
     MPI_Send(contenu,vec.taille,MPI_INT,suivant,1,MPI_COMM_WORLD);
 }
 
-void recoie_vecteur(vecteur* vec,int taille, int precedent){
+void recoit_vecteur(vecteur* vec,int taille, int precedent){
     int* vecteur_recu = alloue_contenu_vecteur(taille);
     MPI_Recv(vecteur_recu,taille,MPI_INT,precedent,MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vec->taille = taille;
@@ -340,24 +348,23 @@ int main(int argc,char** argv){
         taille_resultat = (nb_process-1)*nb_decoupe_chacun;
         resultat = recoit_resultat(taille_resultat,precedent);
         fusionne_resultat_avant(&resultat,&resultat_local);
-        //todo fusionne resultats
+
         affiche_resultat(resultat);
     }else{
-        int taille_vecteur = recoie_taille_vecteur(precedent);
-        recoie_vecteur(&vec,taille_vecteur,precedent);
-        nb_decoupe = recoie_nb_decoupe(precedent);
-        taille_matrice_restante = recoie_taille_matrice_restante(precedent);
-        mat = recoie_matrice_restante(taille_matrice_restante,precedent,vec.taille);
-        taille_resultat = nb_decoupe*rang - nb_decoupe;
-        sous_matrice = decoupe_matrice(&mat,nb_decoupe);
+        int taille_vecteur = recoit_taille_vecteur(precedent);
+        recoit_vecteur(&vec,taille_vecteur,precedent);
+        nb_decoupe = recoit_nb_decoupe(precedent);
+        taille_matrice_restante = recoit_taille_matrice_restante(precedent);
+        mat = recoit_morceau_matrice_processus(precedent,vec.taille,nb_decoupe);
         if (suivant != 0){
             transfert_taille_vecteur(vec.taille,suivant);
             transfert_vecteur(vec,suivant);
             transfert_nb_decoupe(nb_decoupe,suivant);
-            transfert_taille_matrice_restante(mat.nb_lignes,suivant);
-            transfert_matrice_restante(mat,suivant);
+            transfert_taille_matrice_restante(taille_matrice_restante-nb_decoupe,suivant);
+            transfert_reste_matrice(nb_decoupe,taille_matrice_restante,vec.taille,precedent,suivant);
         }
-        calcul_resultat(sous_matrice,vec,&resultat_local);
+        calcul_resultat(mat,vec,&resultat_local);
+        taille_resultat = nb_decoupe*rang - nb_decoupe;
         if (precedent != 0) resultat = recoit_resultat(taille_resultat,precedent);
         fusionne_resultat(&resultat,&resultat_local);
         transfert_resultat(resultat,suivant);
