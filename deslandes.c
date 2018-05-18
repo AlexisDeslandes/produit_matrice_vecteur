@@ -237,7 +237,6 @@ matrice decoupe_matrice(matrice* mat, int nb_decoupe){
 
 int calcul_vecteur_vecteur(int* tab, vecteur vec){
     int resultat = 0;
-    #pragma omp parallel for reduction(+:resultat)
     for (int i =0;i<vec.taille;i++){
         resultat += tab[i] * vec.contenu[i];
     }
@@ -247,6 +246,7 @@ int calcul_vecteur_vecteur(int* tab, vecteur vec){
 void calcul_resultat(matrice mat,vecteur vec,vecteur* resultat){
     resultat->taille = mat.nb_lignes;
     resultat->contenu = alloue_contenu_vecteur(resultat->taille);
+    #pragma omp parallel for
     for (int i =0;i<resultat->taille;i++){
         resultat->contenu[i] = calcul_vecteur_vecteur(mat.lignes[i],vec);
     }
