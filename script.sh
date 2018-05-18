@@ -1,1 +1,1 @@
-mpirun -np 4 deslandes.o a_p_10 v_p_10
+mpirun -np 3 deslandes.o a_8 v_8
